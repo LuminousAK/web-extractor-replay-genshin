@@ -120,6 +120,8 @@ node server.js -d projects/空月之歌
     - 下一步，弹出警告就“是”。
     - 验证方法：``Win+R``输入``certlm.msc``。``受信任的根证书颁发机构`` -> ``证书``列表中能找到一个你刚刚起的common name的证书。
 
+**另：MITM server出现问题可以尝试删掉自动生成的``.http-mitm-proxy``和``edge-temp-profile``文件夹（相当于手动删缓存）再试试（）**
+
 
 ## **3: run_all.bat 一键启动**
 
