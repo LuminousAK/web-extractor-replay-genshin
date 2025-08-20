@@ -1,0 +1,6 @@
+/.http-mitm-proxy
+/edge-temp-profile
+/*.har
+/projects/*
+/node_modules/
+/my-ca/
