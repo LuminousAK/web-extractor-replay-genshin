@@ -113,7 +113,8 @@ def main():
     parser.add_argument("--timeout", type=int, default=10, help="请求超时时间 (秒)")
     args = parser.parse_args()
 
-    extract_from_har(har_file=args.har_file, project_dir=args.out, mapping_file=args.map, timeout=args.timeout)
+    # extract_from_har(har_file=args.har_file, project_dir=args.out, mapping_file=args.map, timeout=args.timeout)
+    extract_from_har(har_file=args.har_file, project_dir=args.out, mapping_file="url_mapping.json", timeout=args.timeout)
 
 if __name__ == "__main__":
     main()
