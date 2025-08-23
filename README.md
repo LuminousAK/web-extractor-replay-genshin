@@ -4,8 +4,10 @@
 1. 可以通过HAR文件提取网页资源。
 2. 可以通过MITM在本地复现一个可以动的网页。
 
+以下网页已经过测试可行（）：
 - ✅ [原神官网首页](https://ys.mihoyo.com)
 - ✅ [「空月之歌」](https://ys.mihoyo.com/moon)
+- ✅ [「空月之歌」挪德卡莱概念站](https://act.mihoyo.com/ys/event/e20250723light-uowufz/index.html)
 
 ## **环境**
 
