@@ -13,6 +13,7 @@ program
     .requiredOption("-d, --project-dir <path>", "项目目录")
     .option("-c, --config <path>", "配置文件路径", "config.json")
     .option("-k, --no-ignore-cert-errors", "启动浏览器时，不忽略证书错误。默认忽略。（注意!该选项可能导致浏览器无法连接代理。）")
+    .option("-i, --incognito", "使用无痕模式启动浏览器")
 program.parse(process.argv);
 const options = program.opts();
 
@@ -75,23 +76,39 @@ proxy.onRequest((ctx, callback)=> {
 
     console.log(`📡 请求: ${fullUrl}`);
 
-    if (urlMapping[fullUrl]) {
+    const mappingInfo = urlMapping[fullUrl];
+    if (mappingInfo) {
         // 命中本地资源
-        const localFilePath = path.join(projectDir, urlMapping[fullUrl]);
-        if (fs.existsSync(localFilePath)) {
-            console.log(`✅ 本地命中: ${fullUrl}`);
-            const fileStream = fs.createReadStream(localFilePath);
+        const requestMethod = ctx.clientToProxyRequest.method.toUpperCase();
+        const mappingMethod = mappingInfo.method.toUpperCase();
 
-            const headers = {
-                "Access-Control-Allow-Credentials": "true",
-                'Access-Control-Allow-Origin': ctx.clientToProxyRequest.headers["origin"] || "*",
-                // 'Access-Control-Allow-Methods': 'GET, OPTIONS',
-                'Access-Control-Allow-Headers': '*',
-            };
+        if (requestMethod === mappingMethod) {
+            const localFilePath = path.join(projectDir, mappingInfo.local_file);
+            if (fs.existsSync(localFilePath)) {
+                console.log(`✅ 本地命中: ${fullUrl}`);
+                const fileStream = fs.createReadStream(localFilePath);
 
-            ctx.proxyToClientResponse.writeHead(200, headers);
-            fileStream.pipe(ctx.proxyToClientResponse);
-            return;
+                const headers = {
+                    "Access-Control-Allow-Credentials": "true",
+                    'Access-Control-Allow-Origin': ctx.clientToProxyRequest.headers["origin"] || "*",
+                    // 'Access-Control-Allow-Methods': 'GET, OPTIONS',
+                    'Access-Control-Allow-Headers': '*',
+                };
+
+                if (requestMethod === 'POST' && path.extname(localFilePath).toLowerCase() === '.json') {
+                    headers['Content-Type'] = 'application/json; charset=utf-8';
+                }
+
+                ctx.proxyToClientResponse.writeHead(200, headers);
+                fileStream.pipe(ctx.proxyToClientResponse);
+                return;
+            }
+            else {
+                console.warn(`⚠️  映射命中但本地文件不存在: ${localFilePath}`);
+            }
+        }
+        else {
+            console.log(`ℹ️  URL命中但方法不匹配: 请求为 ${requestMethod}, 映射要求为 ${mappingMethod}。将回源。`);
         }
     }
 
@@ -152,6 +169,49 @@ proxy.onResponse((ctx, callback) => {
 // 创建并配置 Express Web 服务器
 // ==========================================================
 const app = express();
+// 中间件，处理相对路径
+app.use((req, res, next) => {
+    const requestedPath = decodeURIComponent(req.url);
+    const requester = req.headers.referer || 'Unknown (Direct Request)';
+    console.log(`[Web Server] Request for: ${requestedPath} | From: ${requester}`);
+    const matches = [];
+
+    // 遍历映射表中的所有原始 URL
+    for (const originalUrl in urlMapping) {
+        try {
+            const parsedUrl = new URL(originalUrl);
+            // 比较路径部分是否与当前请求的路径匹配
+            let parts = requestedPath.split('/')
+            let filtered_parts = parts.filter(part => part !== 'assets');
+            if (originalUrl === requestedPath || (requestedPath.startsWith("/assets") && originalUrl.endsWith(filtered_parts.join('/')))) {
+                if (urlMapping[originalUrl].method.toUpperCase() === 'GET'){
+                    matches.push(urlMapping[originalUrl].local_file);
+                }
+            }
+        } catch (e) {
+            // 忽略无法解析的 URL
+        }
+    }
+
+    // 如果且仅如果找到一个唯一的匹配项
+    if (matches.length === 1) {
+        const localFile = matches[0];
+        const fullPath = path.resolve(projectDir, localFile);
+
+        if (fs.existsSync(fullPath)) {
+            console.log(`✅ [Web Server] 动态命中: ${req.url} -> ${localFile}`);
+            // 直接发送文件，Express 会自动设置正确的 Content-Type
+            return res.sendFile(fullPath);
+        }
+    }
+
+    // 如果没有找到或找到多个匹配项，则交给下一个中间件处理
+    if (matches.length > 1) {
+        console.warn(`⚠️ [Web Server] 发现模糊匹配: ${req.path} 有 ${matches.length} 个可能的本地文件。`);
+    }
+
+    next();
+});
 app.use(express.static(projectDir));
 
 // ==========================================================
@@ -192,6 +252,11 @@ function launchBrowser(){
         browserArgs.push("--ignore-certificate-errors");
         console.info("ℹ️ 浏览器将忽略 SSL 证书错误。");
     }
+    if (options.incognito) {
+        browserArgs.push("--inprivate");
+        console.info("ℹ️ 浏览器将以无痕模式启动。");
+    }
+
     browserArgs.push(startUrl);
 
     spawn(executablePath, browserArgs, { detached: true, stdio: "ignore" });

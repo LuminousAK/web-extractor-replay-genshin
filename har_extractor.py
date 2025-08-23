@@ -19,9 +19,10 @@ def safe_filename(url, mime_type=""):
     if 'text/html' in mime_type.lower() and ext.lower() not in ['.html', '.htm']:
         ext = '.html'
 
-    # 加 hash 避免重名冲突
-    hash_suffix = hashlib.md5(url.encode()).hexdigest()[:8]
-    return f"{base}_{hash_suffix}{ext}" if ext else f"{base}_{hash_suffix}"
+    # # 加 hash 避免重名冲突
+    # hash_suffix = hashlib.md5(url.encode()).hexdigest()[:8]
+    # return f"{base}_{hash_suffix}{ext}" if ext else f"{base}_{hash_suffix}"
+    return f"{base}{ext}" if ext else base
 
 def download_file(url, filepath, timeout=10):
     """
@@ -61,6 +62,9 @@ def extract_from_har(har_file, project_dir, mapping_file, timeout=10):
     assets_dir = os.path.join(project_dir, "assets")
     os.makedirs(assets_dir, exist_ok=True)
 
+    api_mocks_dir = os.path.join(project_dir, "api_mocks")
+    os.makedirs(api_mocks_dir, exist_ok=True)
+
     output_data = {
         "entry_point":{
             "origin": None,
@@ -70,27 +74,91 @@ def extract_from_har(har_file, project_dir, mapping_file, timeout=10):
     }
 
     entry_point_url = entries[0]["request"]["url"]
+
+    method_priority = {
+        'GET': 1,
+        'POST': 2,
+        'PUT': 3,
+        'PATCH': 3,
+        'DELETE': 3,
+        'HEAD': 4,
+        'OPTIONS': 5,
+    }
     unique_entries_map = {}
 
     # 去重
     for entry in entries:
         url = entry["request"]["url"]
+        method = entry.get("request", {}).get("method", "GET").upper()
+        current_priority = method_priority.get(method, 99)  # 获取当前方法的优先级，未知方法优先级最低
         if url not in unique_entries_map:
+            # 如果是第一次遇到这个URL，直接添加
             unique_entries_map[url] = entry
+        else:
+            # 如果已经存在，比较优先级
+            existing_entry = unique_entries_map[url]
+            existing_method = existing_entry.get("request", {}).get("method", "GET").upper()
+            existing_priority = method_priority.get(existing_method, 99)
+
+            # 如果当前条目的优先级更高（数值更小），就替换掉旧的
+            if current_priority < existing_priority:
+                unique_entries_map[url] = entry
+
+    used_filenames = set()
 
     for url, entry in unique_entries_map.items():
-        mime_type = entry.get("response", {}).get("content", {}).get("mimeType", "")
+        request = entry.get("request", {})
+        method = request.get("method", "GET").upper()
 
-        filename = safe_filename(url, mime_type)
-        filepath = os.path.join(assets_dir, filename)
+        if method == "GET":
+            mime_type = entry.get("response", {}).get("content", {}).get("mimeType", "")
 
-        if download_file(url, filepath, timeout):
-            relative_path = os.path.relpath(filepath, project_dir)
-            output_data["url_mapping"][url] = relative_path
+            filename = safe_filename(url, mime_type)
+            filepath = os.path.join(assets_dir, filename)
 
-            if url == entry_point_url:
-                output_data["entry_point"]["origin"] = url
-                output_data["entry_point"]["local_file"] = relative_path
+            # 如果冲突，则为当前文件添加哈希
+            if filepath in used_filenames:
+                base, ext = os.path.splitext(filename)
+                hash_suffix = hashlib.md5(url.encode()).hexdigest()[:8]
+                filename = f"{base}_{hash_suffix}{ext}"
+                filepath = os.path.join(assets_dir, filename)
+            used_filenames.add(filepath)
+
+            if download_file(url, filepath, timeout):
+                relative_path = os.path.relpath(filepath, project_dir)
+                output_data["url_mapping"][url] = {
+                    "method": "GET",
+                    "local_file": relative_path
+                }
+
+                if url == entry_point_url:
+                    output_data["entry_point"]["origin"] = url
+                    output_data["entry_point"]["local_file"] = relative_path
+        elif method == 'POST':
+            response_content = entry.get("response", {}).get("content", {}).get("text", "")
+            # 如果响应内容为空，则跳过
+            if not response_content:
+                print(f"⏩ [POST] 跳过空响应请求: {url}")
+                continue
+
+            # 为POST响应创建一个安全的文件名
+            parsed_path = urlparse(url).path.strip('/')
+            mock_filename = f"{parsed_path.replace('/', '_')}_{hashlib.md5(url.encode()).hexdigest()[:8]}.json"
+            mock_filepath = os.path.join(api_mocks_dir, mock_filename)
+            try:
+                # 检查响应是否为有效的JSON
+                json.loads(response_content)
+                with open(mock_filepath, "w", encoding="utf-8") as f:
+                    f.write(response_content)
+
+                relative_path = os.path.relpath(mock_filepath, project_dir)
+                output_data["url_mapping"][url] = {
+                    "method": "POST",
+                    "local_file": relative_path
+                }
+                print(f"✅ [POST] 响应已保存: {url} -> {mock_filepath}")
+            except (json.JSONDecodeError, TypeError):
+                print(f"❌ [POST] 响应不是有效的JSON，已跳过: {url}")
 
     # 保存映射表
     mapping_path = os.path.join(project_dir, mapping_file)
